@@ -2,6 +2,7 @@ approvers:
   - chmouel
   - zakisk
   - theakshaypant
+  - "codecov[bot]"
 
 reviewers:
   - vdemeester

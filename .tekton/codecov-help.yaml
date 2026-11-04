@@ -1,0 +1,230 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: "coverage-helper"
+  annotations:
+    # Codecov comment updates require support-edited-comments: "true" on the controller.
+    pipelinesascode.tekton.dev/on-comment: "^## \\[Codecov\\]"
+spec:
+  pipelineSpec:
+    tasks:
+      - name: generate-coverage-prompt
+        displayName: "Generate LLM coverage prompt"
+        taskSpec:
+          steps:
+            - name: fetch-and-format
+              image: registry.access.redhat.com/ubi9/ubi-minimal
+              env:
+                - name: REPO_OWNER
+                  value: "{{ repo_owner }}"
+                - name: REPO_NAME
+                  value: "{{ repo_name }}"
+                - name: PULL_REQUEST_NUMBER
+                  value: "{{ pull_request_number }}"
+                - name: REPO_URL
+                  value: "{{ repo_url }}"
+                - name: REVISION
+                  value: "{{ revision }}"
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: "{{ git_auth_secret }}"
+                      key: "git-provider-token"
+              script: |
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                microdnf install -y git jq python3
+
+                # PaC stores this token URL-escaped for Git credentials.
+                GITHUB_TOKEN=$(python3 -c 'import os, urllib.parse; print(urllib.parse.unquote_plus(os.environ["GITHUB_TOKEN"]))')
+
+                # GitHub exposes fork PR heads in the target repository's pull refs.
+                git init /tmp/repo
+                cd /tmp/repo
+                git remote add origin "${REPO_URL}"
+                git fetch --depth=1 origin "refs/pull/${PULL_REQUEST_NUMBER}/head"
+                if [ "$(git rev-parse FETCH_HEAD)" != "${REVISION}" ]; then
+                  echo "PR head changed since this run was triggered; rerun for the latest commit." >&2
+                  exit 1
+                fi
+                git checkout --detach "${REVISION}"
+
+                # Fetch uncovered added lines from Codecov compare API
+                CODECOV_URL="https://api.codecov.io/api/v2/github/${REPO_OWNER}/repos/${REPO_NAME}/compare/?pullid=${PULL_REQUEST_NUMBER}"
+
+                curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+                  "${CODECOV_URL}" -H "accept: application/json" -o /tmp/codecov.json
+                if ! jq -e --arg revision "${REVISION}" \
+                  '(.files | type == "array") and (.totals.head | type == "object") and .head_commit == $revision' \
+                  /tmp/codecov.json > /dev/null; then
+                  echo "Codecov has no valid coverage report for ${REVISION}; retry after coverage is uploaded." >&2
+                  exit 1
+                fi
+
+                export COMMENT_MARKER='<!-- pipelines-as-code:coverage-helper -->'
+
+                # Extract uncovered added lines and format as LLM prompt
+                python3 << 'PYEOF'
+                import json
+                import os
+
+                with open("/tmp/codecov.json") as f:
+                    data = json.load(f)
+
+                gaps = {}
+                for file_entry in data["files"]:
+                    if not file_entry.get("has_diff"):
+                        continue
+                    name = file_entry["name"]
+                    if isinstance(name, dict):
+                        name = name.get("head", "")
+                    # Only report Go source; Codecov may also return other files.
+                    if not name or not name.endswith(".go") or name.endswith("_test.go") or "zz_generated" in name or "vendor/" in name:
+                        continue
+                    uncovered = []
+                    for line in file_entry["lines"]:
+                        if not line["added"]:
+                            continue
+                        cov = line.get("coverage", {})
+                        head_cov = cov.get("head")
+                        # The compare API uses 0=hit, 1=miss, 2=partial.
+                        if head_cov in (1, 2):
+                            uncovered.append({
+                                "num": line["number"]["head"],
+                                "partial": head_cov == 2,
+                            })
+                    if uncovered:
+                        gaps[name] = sorted(uncovered, key=lambda line: line["num"])
+
+                if not gaps:
+                    with open("/tmp/comment.md", "w") as out:
+                        out.write("## Coverage Helper\n\n")
+                        out.write(os.environ["COMMENT_MARKER"] + "\n\n")
+                        out.write(":white_check_mark: Codecov reported no added lines with incomplete coverage in the analyzed files.\n")
+                else:
+                    total_uncovered = sum(len(v) for v in gaps.values())
+                    lines = []
+                    lines.append("## Coverage Helper\n")
+                    lines.append(os.environ["COMMENT_MARKER"] + "\n")
+                    lines.append(f":mag: Found **{total_uncovered} lines with incomplete coverage** across **{len(gaps)} files** in this PR.\n")
+                    lines.append("<details><summary>Click to expand LLM prompt — copy and paste into your AI assistant</summary>\n")
+                    lines.append("```text")
+                    lines.append("I have a Go project. The following lines in my PR lack full test coverage.")
+                    lines.append("Write unit tests for each uncovered path.")
+                    lines.append("Use gotest.tools/v3/assert for assertions (never testify).")
+                    lines.append("Use table-driven tests with anonymous struct pattern.")
+                    lines.append("Add cases to existing test tables when possible.")
+                    lines.append("Match the style in the existing _test.go files.")
+                    lines.append("Lines marked with >>> have zero coverage. Lines marked with !!! have partial coverage.\n")
+
+                    for filepath, uncov_lines in gaps.items():
+                        # Group consecutive lines into ranges
+                        ranges = []
+                        start = uncov_lines[0]["num"]
+                        end = start
+                        for u in uncov_lines[1:]:
+                            if u["num"] == end + 1:
+                                end = u["num"]
+                            else:
+                                ranges.append((start, end))
+                                start = u["num"]
+                                end = start
+                        ranges.append((start, end))
+
+                        range_strs = []
+                        for s, e in ranges:
+                            range_strs.append(f"L{s}-L{e}" if s != e else f"L{s}")
+
+                        lines.append(f"\n--- {filepath} ({len(uncov_lines)} uncovered lines: {', '.join(range_strs)}) ---\n")
+
+                        # Read actual source and show uncovered lines with context
+                        src_path = os.path.join("/tmp/repo", filepath)
+                        if os.path.exists(src_path):
+                            with open(src_path) as sf:
+                                src_lines = sf.readlines()
+                            uncov_nums = {u["num"]: u.get("partial", False) for u in uncov_lines}
+                            for s, e in ranges:
+                                ctx_start = max(0, s - 3)
+                                ctx_end = min(len(src_lines), e + 2)
+                                lines.append(f"  Lines {s}-{e}:")
+                                for i in range(ctx_start, ctx_end):
+                                    ln = i + 1
+                                    if ln in uncov_nums:
+                                        marker = "!!!" if uncov_nums[ln] else ">>>"
+                                    else:
+                                        marker = "   "
+                                    lines.append(f"    {marker} {ln}: {src_lines[i].rstrip()}")
+                                lines.append("")
+
+                        test_file = os.path.splitext(filepath)[0] + "_test.go"
+                        if os.path.isfile(os.path.join("/tmp/repo", test_file)):
+                            lines.append(f"  Existing test file: {test_file}\n")
+                        else:
+                            lines.append(f"  Candidate test file: {test_file}\n")
+
+                    lines.append("```\n")
+                    lines.append("</details>\n")
+
+                    body = "\n".join(lines)
+                    # Leave room below GitHub's comment limit, including for UTF-8 text.
+                    if len(body.encode("utf-8")) > 60000:
+                        body = body.encode("utf-8")[:59000].decode("utf-8", errors="ignore").rsplit("\n", 1)[0]
+                        body += "\n\n[Output truncated; see Codecov for remaining lines.]\n```\n</details>\n"
+                    with open("/tmp/comment.md", "w") as out:
+                        out.write(body)
+
+                PYEOF
+
+                github_api() {
+                  curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+                    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                    -H "Accept: application/vnd.github+json" \
+                    -H "Content-Type: application/json" \
+                    "$@"
+                }
+
+                # User tokens can identify their author; installation tokens cannot use /user.
+                USER_STATUS=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
+                  -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                  -H "Accept: application/vnd.github+json" \
+                  -o /tmp/github-user.json -w '%{http_code}' https://api.github.com/user)
+                COMMENT_AUTHOR=""
+                case "${USER_STATUS}" in
+                  200) COMMENT_AUTHOR=$(jq -er '.login | select(type == "string" and length > 0)' /tmp/github-user.json) ;;
+                  401|403|404) ;; # GitHub App installation tokens cannot access /user.
+                  *) echo "GitHub user lookup failed with HTTP ${USER_STATUS}" >&2; exit 1 ;;
+                esac
+
+                # Search every page for the marked comment from the authenticated user or app bot.
+                COMMENTS_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/issues/${PULL_REQUEST_NUMBER}/comments"
+                EXISTING_COMMENT_ID=""
+                PAGE=1
+                while :; do
+                  github_api "${COMMENTS_URL}?per_page=100&page=${PAGE}" -o /tmp/comments.json
+                  jq -e 'type == "array"' /tmp/comments.json > /dev/null
+                  MATCHING_COMMENT_ID=$(jq -r --arg marker "${COMMENT_MARKER}" --arg author "${COMMENT_AUTHOR}" \
+                    '[.[] | select(((.body // "") | contains($marker)) and (if $author != "" then .user.login == $author else .user.type == "Bot" end))] | last | .id // empty' \
+                    /tmp/comments.json)
+                  if [ -n "${MATCHING_COMMENT_ID}" ]; then
+                    EXISTING_COMMENT_ID="${MATCHING_COMMENT_ID}"
+                  fi
+                  if [ "$(jq 'length' /tmp/comments.json)" -lt 100 ]; then
+                    break
+                  fi
+                  PAGE=$((PAGE + 1))
+                done
+
+                jq -n --rawfile body /tmp/comment.md '{body: $body}' > /tmp/payload.json
+
+                if [ -n "${EXISTING_COMMENT_ID}" ]; then
+                  github_api -X PATCH \
+                    "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/issues/comments/${EXISTING_COMMENT_ID}" \
+                    --data-binary @/tmp/payload.json -o /tmp/comment-response.json
+                  echo "Updated existing Coverage Helper comment (id: ${EXISTING_COMMENT_ID}) on PR #${PULL_REQUEST_NUMBER}"
+                else
+                  github_api -X POST "${COMMENTS_URL}" \
+                    --data-binary @/tmp/payload.json -o /tmp/comment-response.json
+                  echo "Created new Coverage Helper comment on PR #${PULL_REQUEST_NUMBER}"
+                fi
