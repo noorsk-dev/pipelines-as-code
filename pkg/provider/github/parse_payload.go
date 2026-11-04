@@ -588,6 +588,23 @@ func (v *Provider) setReRequestSender(runevent *info.Event, sender *github.User)
 	v.userType = sender.GetType()
 }
 
+func validatePullRequestPayload(event *github.PullRequestEvent) error {
+	if event.GetRepo() == nil {
+		return errors.New("error parsing payload the repository should not be nil")
+	}
+	pr := event.GetPullRequest()
+	if pr == nil {
+		return errors.New("error parsing payload: pull request is missing")
+	}
+	if pr.Head == nil {
+		return errors.New("error parsing payload: pull request head is missing")
+	}
+	if pr.Base == nil {
+		return errors.New("error parsing payload: pull request base is missing")
+	}
+	return nil
+}
+
 func (v *Provider) processEvent(ctx context.Context, event *info.Event, eventInt any) (*info.Event, error) {
 	var processedEvent *info.Event
 	var err error
@@ -702,10 +719,10 @@ func (v *Provider) processEvent(ctx context.Context, event *info.Event, eventInt
 		processedEvent.HeadURL = processedEvent.BaseURL // in push events Head URL is the same as BaseURL
 		v.userType = gitEvent.GetSender().GetType()
 	case *github.PullRequestEvent:
-		processedEvent.Repository = gitEvent.GetRepo().GetName()
-		if gitEvent.GetRepo() == nil {
-			return nil, errors.New("error parsing payload the repository should not be nil")
+		if err := validatePullRequestPayload(gitEvent); err != nil {
+			return nil, err
 		}
+		processedEvent.Repository = gitEvent.GetRepo().GetName()
 		processedEvent.Organization = gitEvent.GetRepo().Owner.GetLogin()
 		processedEvent.DefaultBranch = gitEvent.GetRepo().GetDefaultBranch()
 		processedEvent.SHA = gitEvent.GetPullRequest().Head.GetSHA()
