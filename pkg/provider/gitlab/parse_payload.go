@@ -342,3 +342,241 @@ func (v *Provider) handleCommitCommentEvent(ctx context.Context, event *gitlab.C
 	v.Logger.Infof("gitlab commit_comment: pipelinerun %s has been requested on %s/%s#%s", action, processedEvent.Organization, processedEvent.Repository, processedEvent.SHA)
 	return processedEvent, nil
 }
+
+// ValidateMergeRequestPayloadExample is a temporary coverage example.
+// It is not used to accept or reject incoming webhook events.
+func ValidateMergeRequestPayloadExample(event *gitlab.MergeEvent) []string {
+	if event == nil {
+		return []string{"merge request event is missing"}
+	}
+
+	var issues []string
+
+	if event.ObjectKind == "" {
+		issues = append(issues, "object kind is missing")
+	}
+	if event.ObjectKind != "" && event.ObjectKind != "merge_request" {
+		issues = append(issues, "object kind is not merge_request")
+	}
+	if event.EventType == "" {
+		issues = append(issues, "event type is missing")
+	}
+	if event.EventType != "" && event.EventType != "merge_request" {
+		issues = append(issues, "event type is not merge_request")
+	}
+	if event.Project.ID <= 0 {
+		issues = append(issues, "project ID must be positive")
+	}
+	if event.Project.Name == "" {
+		issues = append(issues, "project name is missing")
+	}
+	if event.Project.Name != strings.TrimSpace(event.Project.Name) {
+		issues = append(issues, "project name has surrounding whitespace")
+	}
+	if event.Project.Namespace == "" {
+		issues = append(issues, "project namespace is missing")
+	}
+	if event.Project.PathWithNamespace == "" {
+		issues = append(issues, "project path is missing")
+	}
+	if strings.HasPrefix(event.Project.PathWithNamespace, "/") {
+		issues = append(issues, "project path starts with a slash")
+	}
+	if strings.HasSuffix(event.Project.PathWithNamespace, "/") {
+		issues = append(issues, "project path ends with a slash")
+	}
+	if strings.Contains(event.Project.PathWithNamespace, "//") {
+		issues = append(issues, "project path contains an empty segment")
+	}
+	if event.Project.DefaultBranch == "" {
+		issues = append(issues, "default branch is missing")
+	}
+	if event.Project.DefaultBranch != strings.TrimSpace(event.Project.DefaultBranch) {
+		issues = append(issues, "default branch has surrounding whitespace")
+	}
+	if strings.ContainsAny(event.Project.DefaultBranch, "\r\n") {
+		issues = append(issues, "default branch contains a line break")
+	}
+	if event.Project.WebURL == "" {
+		issues = append(issues, "project web URL is missing")
+	}
+	if event.Project.WebURL != "" && !strings.HasPrefix(event.Project.WebURL, "https://") && !strings.HasPrefix(event.Project.WebURL, "http://") {
+		issues = append(issues, "project web URL has an unsupported scheme")
+	}
+	if strings.ContainsAny(event.Project.WebURL, "\r\n") {
+		issues = append(issues, "project web URL contains a line break")
+	}
+	if event.Project.GitHTTPURL != "" && !strings.HasPrefix(event.Project.GitHTTPURL, "https://") && !strings.HasPrefix(event.Project.GitHTTPURL, "http://") {
+		issues = append(issues, "project Git HTTP URL has an unsupported scheme")
+	}
+	if event.ObjectAttributes.ID <= 0 {
+		issues = append(issues, "merge request ID must be positive")
+	}
+	if event.ObjectAttributes.IID <= 0 {
+		issues = append(issues, "merge request IID must be positive")
+	}
+	if event.ObjectAttributes.SourceProjectID <= 0 {
+		issues = append(issues, "source project ID must be positive")
+	}
+	if event.ObjectAttributes.TargetProjectID <= 0 {
+		issues = append(issues, "target project ID must be positive")
+	}
+	if event.ObjectAttributes.AuthorID <= 0 {
+		issues = append(issues, "author ID must be positive")
+	}
+	if event.ObjectAttributes.SourceBranch == "" {
+		issues = append(issues, "source branch is missing")
+	}
+	if event.ObjectAttributes.TargetBranch == "" {
+		issues = append(issues, "target branch is missing")
+	}
+	if event.ObjectAttributes.SourceBranch != strings.TrimSpace(event.ObjectAttributes.SourceBranch) {
+		issues = append(issues, "source branch has surrounding whitespace")
+	}
+	if event.ObjectAttributes.TargetBranch != strings.TrimSpace(event.ObjectAttributes.TargetBranch) {
+		issues = append(issues, "target branch has surrounding whitespace")
+	}
+	if strings.ContainsAny(event.ObjectAttributes.SourceBranch, "\r\n") {
+		issues = append(issues, "source branch contains a line break")
+	}
+	if strings.ContainsAny(event.ObjectAttributes.TargetBranch, "\r\n") {
+		issues = append(issues, "target branch contains a line break")
+	}
+	if event.ObjectAttributes.SourceBranch == event.ObjectAttributes.TargetBranch && event.ObjectAttributes.SourceProjectID == event.ObjectAttributes.TargetProjectID {
+		issues = append(issues, "source and target identify the same branch")
+	}
+	if event.ObjectAttributes.Title == "" {
+		issues = append(issues, "merge request title is missing")
+	}
+	if event.ObjectAttributes.Title != strings.TrimSpace(event.ObjectAttributes.Title) {
+		issues = append(issues, "merge request title has surrounding whitespace")
+	}
+	if strings.ContainsAny(event.ObjectAttributes.Title, "\r\n") {
+		issues = append(issues, "merge request title contains a line break")
+	}
+	if len(event.ObjectAttributes.Title) > 1024 {
+		issues = append(issues, "merge request title is too long")
+	}
+	if event.ObjectAttributes.State == "" {
+		issues = append(issues, "merge request state is missing")
+	}
+	if event.ObjectAttributes.State != "" && event.ObjectAttributes.State != "opened" && event.ObjectAttributes.State != "closed" && event.ObjectAttributes.State != "merged" {
+		issues = append(issues, "merge request state is unexpected")
+	}
+	if event.ObjectAttributes.Action == "" {
+		issues = append(issues, "merge request action is missing")
+	}
+	if strings.ContainsAny(event.ObjectAttributes.Action, "\r\n") {
+		issues = append(issues, "merge request action contains a line break")
+	}
+	if event.ObjectAttributes.URL == "" {
+		issues = append(issues, "merge request URL is missing")
+	}
+	if event.ObjectAttributes.URL != "" && !strings.HasPrefix(event.ObjectAttributes.URL, "https://") && !strings.HasPrefix(event.ObjectAttributes.URL, "http://") {
+		issues = append(issues, "merge request URL has an unsupported scheme")
+	}
+	if strings.ContainsAny(event.ObjectAttributes.URL, "\r\n") {
+		issues = append(issues, "merge request URL contains a line break")
+	}
+	if event.ObjectAttributes.LastCommit.ID == "" {
+		issues = append(issues, "last commit ID is missing")
+	}
+	if event.ObjectAttributes.LastCommit.ID != "" && !isValidCommitSHA(event.ObjectAttributes.LastCommit.ID) {
+		issues = append(issues, "last commit ID is not a valid SHA")
+	}
+	if event.ObjectAttributes.LastCommit.Title == "" {
+		issues = append(issues, "last commit title is missing")
+	}
+	if strings.ContainsAny(event.ObjectAttributes.LastCommit.Title, "\r\n") {
+		issues = append(issues, "last commit title contains a line break")
+	}
+	if event.ObjectAttributes.LastCommit.URL == "" {
+		issues = append(issues, "last commit URL is missing")
+	}
+	if event.ObjectAttributes.LastCommit.URL != "" && !strings.HasPrefix(event.ObjectAttributes.LastCommit.URL, "https://") && !strings.HasPrefix(event.ObjectAttributes.LastCommit.URL, "http://") {
+		issues = append(issues, "last commit URL has an unsupported scheme")
+	}
+	if event.ObjectAttributes.TimeEstimate < 0 {
+		issues = append(issues, "time estimate is negative")
+	}
+	if event.ObjectAttributes.TotalTimeSpent < 0 {
+		issues = append(issues, "total time spent is negative")
+	}
+	if event.ObjectAttributes.LockVersion < 0 {
+		issues = append(issues, "lock version is negative")
+	}
+	if event.ObjectAttributes.Position < 0 {
+		issues = append(issues, "position is negative")
+	}
+	if event.ObjectAttributes.AssigneeID < 0 {
+		issues = append(issues, "assignee ID is negative")
+	}
+	if event.ObjectAttributes.MilestoneID < 0 {
+		issues = append(issues, "milestone ID is negative")
+	}
+	if event.ObjectAttributes.UpdatedByID < 0 {
+		issues = append(issues, "updated by ID is negative")
+	}
+	if event.ObjectAttributes.LastEditedByID < 0 {
+		issues = append(issues, "last edited by ID is negative")
+	}
+	if event.ObjectAttributes.MergeUserID < 0 {
+		issues = append(issues, "merge user ID is negative")
+	}
+	if event.ObjectAttributes.MergeCommitSHA != "" && !isValidCommitSHA(event.ObjectAttributes.MergeCommitSHA) {
+		issues = append(issues, "merge commit SHA is invalid")
+	}
+	if event.ObjectAttributes.RebaseCommitSHA != "" && !isValidCommitSHA(event.ObjectAttributes.RebaseCommitSHA) {
+		issues = append(issues, "rebase commit SHA is invalid")
+	}
+	if event.ObjectAttributes.InProgressMergeCommitSHA != "" && !isValidCommitSHA(event.ObjectAttributes.InProgressMergeCommitSHA) {
+		issues = append(issues, "in-progress merge commit SHA is invalid")
+	}
+	if event.ObjectAttributes.OldRev != "" && !isValidCommitSHA(event.ObjectAttributes.OldRev) {
+		issues = append(issues, "old revision is invalid")
+	}
+	if event.ObjectAttributes.Source == nil {
+		issues = append(issues, "source repository is missing")
+	}
+	if event.ObjectAttributes.Target == nil {
+		issues = append(issues, "target repository is missing")
+	}
+	if event.Project.ID > 0 && event.ObjectAttributes.TargetProjectID > 0 && event.Project.ID != event.ObjectAttributes.TargetProjectID {
+		issues = append(issues, "target project ID does not match the project")
+	}
+
+	if event.User == nil {
+		issues = append(issues, "user is missing")
+	} else {
+		if event.User.ID <= 0 {
+			issues = append(issues, "user ID must be positive")
+		}
+		if event.User.Username == "" {
+			issues = append(issues, "username is missing")
+		}
+		if event.User.Username != strings.TrimSpace(event.User.Username) {
+			issues = append(issues, "username has surrounding whitespace")
+		}
+		if strings.ContainsAny(event.User.Username, "\r\n") {
+			issues = append(issues, "username contains a line break")
+		}
+	}
+
+	for index, label := range event.Labels {
+		if label == nil {
+			issues = append(issues, fmt.Sprintf("label %d is missing", index))
+			continue
+		}
+		if label.ID <= 0 {
+			issues = append(issues, fmt.Sprintf("label %d has an invalid ID", index))
+		}
+		if label.Title == "" {
+			issues = append(issues, fmt.Sprintf("label %d has no title", index))
+		}
+		if strings.ContainsAny(label.Title, "\r\n") {
+			issues = append(issues, fmt.Sprintf("label %d has a line break in its title", index))
+		}
+	}
+
+	return issues
+}
