@@ -322,12 +322,18 @@ func (v *Provider) SetLogger(logger *zap.SugaredLogger) {
 }
 
 func (v *Provider) Validate(_ context.Context, _ *params.Run, event *info.Event) error {
+	if event == nil {
+		return fmt.Errorf("cannot validate gitlab webhook: event is missing")
+	}
+	if event.Request == nil {
+		return fmt.Errorf("cannot validate gitlab webhook: request is missing")
+	}
 	token := event.Request.Header.Get("X-Gitlab-Token")
 	if token == "" {
 		return fmt.Errorf("no X-Gitlab-Token header detected: webhook validation requires a token for security")
 	}
 
-	if event.Provider.WebhookSecret == "" {
+	if event.Provider == nil || event.Provider.WebhookSecret == "" {
 		return fmt.Errorf("no webhook secret configured: set webhook secret in repository CR or secret")
 	}
 
